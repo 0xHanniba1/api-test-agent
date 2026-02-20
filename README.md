@@ -55,7 +55,33 @@ Options:
   --depth quick|full    测试深度（默认 quick）
   --model <name>        LLM 模型（默认 claude-sonnet）
   --format auto|swagger|postman|markdown  文档格式（默认 auto）
+  --filter <pattern>    按接口过滤，支持多次使用（见下方说明）
+  --append              增量模式：追加用例 / 跳过已有代码文件
 ```
+
+### 增量生成
+
+新增接口时无需重新生成全量，使用 `--filter` 和 `--append` 组合：
+
+```bash
+# 只生成 POST /pets 相关的测试，追加到已有输出
+api-test-agent run api-doc.yaml -o output/ --filter "POST /pets" --append
+
+# 生成所有 GET 接口的测试
+api-test-agent run api-doc.yaml -o output/ --filter "GET *" --append
+
+# 多个 filter 组合
+api-test-agent run api-doc.yaml -o output/ --filter "POST /orders*" --filter "PUT /orders*" --append
+```
+
+`--filter` 支持的模式：
+- `"POST /pets"` — 匹配指定 method + path
+- `"/pets/*"` — 任意 method，路径 glob 匹配
+- 支持 `*` 和 `?` 通配符
+
+`--append` 行为：
+- `gen-cases` / `run`：将新用例追加到已有 Markdown 文件末尾
+- `gen-code` / `run`：跳过已存在的代码文件，只写入新文件
 
 ## 配置
 

@@ -1,5 +1,6 @@
 """CLI entry point for api-test-agent."""
 
+import fnmatch
 from pathlib import Path
 
 import click
@@ -26,6 +27,31 @@ def _parse_doc(file_path: Path, fmt: str) -> list[ApiEndpoint]:
         return parse_markdown(file_path)
 
 
+def _filter_endpoints(endpoints: list[ApiEndpoint], patterns: tuple[str]) -> list[ApiEndpoint]:
+    """Filter endpoints by method+path glob patterns.
+
+    Each pattern can be:
+      - "POST /api/orders*" — matches method and path
+      - "/pets/*" — matches any method with matching path
+    """
+    if not patterns:
+        return endpoints
+    filtered = []
+    for ep in endpoints:
+        for pattern in patterns:
+            parts = pattern.split(" ", 1)
+            if len(parts) == 2:
+                method_pat, path_pat = parts
+                if fnmatch.fnmatch(ep.method, method_pat.upper()) and fnmatch.fnmatch(ep.path, path_pat):
+                    filtered.append(ep)
+                    break
+            else:
+                if fnmatch.fnmatch(ep.path, pattern):
+                    filtered.append(ep)
+                    break
+    return filtered
+
+
 @click.group()
 def main():
     """API Test Agent — generate test cases and automation code from API docs."""
@@ -38,10 +64,13 @@ def main():
 @click.option("--depth", default="quick", type=click.Choice(["quick", "full"]), help="Test depth level.")
 @click.option("--model", default=None, help="LLM model to use.")
 @click.option("--format", "fmt", default="auto", type=click.Choice(["auto", "swagger", "postman", "markdown"]), help="Document format.")
-def gen_cases(doc_path: Path, output: Path, depth: str, model: str | None, fmt: str):
+@click.option("--filter", "filters", multiple=True, help="Filter endpoints by pattern, e.g. 'POST /pets' or '/pets/*'.")
+@click.option("--append", "append_mode", is_flag=True, default=False, help="Append to existing file instead of overwriting.")
+def gen_cases(doc_path: Path, output: Path, depth: str, model: str | None, fmt: str, filters: tuple[str], append_mode: bool):
     """Generate test case document from API documentation."""
     click.echo(f"Parsing {doc_path} (format: {fmt})...")
     endpoints = _parse_doc(doc_path, fmt)
+    endpoints = _filter_endpoints(endpoints, filters)
     click.echo(f"Found {len(endpoints)} endpoints.")
 
     click.echo(f"Generating test cases (depth: {depth})...")
@@ -49,15 +78,21 @@ def gen_cases(doc_path: Path, output: Path, depth: str, model: str | None, fmt: 
     result = gen.generate(endpoints, depth=depth)
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(result, encoding="utf-8")
-    click.echo(f"Test cases saved to {output}")
+    if append_mode and output.exists():
+        existing = output.read_text(encoding="utf-8")
+        output.write_text(existing + "\n" + result, encoding="utf-8")
+        click.echo(f"Test cases appended to {output}")
+    else:
+        output.write_text(result, encoding="utf-8")
+        click.echo(f"Test cases saved to {output}")
 
 
 @main.command()
 @click.argument("cases_path", type=click.Path(exists=True, path_type=Path))
 @click.option("-o", "--output", required=True, type=click.Path(path_type=Path), help="Output directory for generated code.")
 @click.option("--model", default=None, help="LLM model to use.")
-def gen_code(cases_path: Path, output: Path, model: str | None):
+@click.option("--append", "append_mode", is_flag=True, default=False, help="Skip existing files instead of overwriting.")
+def gen_code(cases_path: Path, output: Path, model: str | None, append_mode: bool):
     """Generate pytest+requests code from test case document."""
     click.echo(f"Reading test cases from {cases_path}...")
     testcases = cases_path.read_text(encoding="utf-8")
@@ -69,6 +104,9 @@ def gen_code(cases_path: Path, output: Path, model: str | None):
     output.mkdir(parents=True, exist_ok=True)
     for filename, content in files.items():
         file_path = output / filename
+        if append_mode and file_path.exists():
+            click.echo(f"  Skipped {file_path} (already exists)")
+            continue
         file_path.write_text(content, encoding="utf-8")
         click.echo(f"  Created {file_path}")
 
@@ -81,11 +119,14 @@ def gen_code(cases_path: Path, output: Path, model: str | None):
 @click.option("--depth", default="quick", type=click.Choice(["quick", "full"]), help="Test depth level.")
 @click.option("--model", default=None, help="LLM model to use.")
 @click.option("--format", "fmt", default="auto", type=click.Choice(["auto", "swagger", "postman", "markdown"]), help="Document format.")
-def run(doc_path: Path, output: Path, depth: str, model: str | None, fmt: str):
+@click.option("--filter", "filters", multiple=True, help="Filter endpoints by pattern, e.g. 'POST /pets' or '/pets/*'.")
+@click.option("--append", "append_mode", is_flag=True, default=False, help="Append test cases and skip existing code files.")
+def run(doc_path: Path, output: Path, depth: str, model: str | None, fmt: str, filters: tuple[str], append_mode: bool):
     """Full pipeline: parse doc -> generate test cases -> generate code."""
     # Step 1: Parse
     click.echo(f"Parsing {doc_path} (format: {fmt})...")
     endpoints = _parse_doc(doc_path, fmt)
+    endpoints = _filter_endpoints(endpoints, filters)
     click.echo(f"Found {len(endpoints)} endpoints.")
 
     # Step 2: Generate test cases
@@ -95,8 +136,13 @@ def run(doc_path: Path, output: Path, depth: str, model: str | None, fmt: str):
 
     output.mkdir(parents=True, exist_ok=True)
     cases_path = output / "testcases.md"
-    cases_path.write_text(testcases, encoding="utf-8")
-    click.echo(f"  Test cases saved to {cases_path}")
+    if append_mode and cases_path.exists():
+        existing = cases_path.read_text(encoding="utf-8")
+        cases_path.write_text(existing + "\n" + testcases, encoding="utf-8")
+        click.echo(f"  Test cases appended to {cases_path}")
+    else:
+        cases_path.write_text(testcases, encoding="utf-8")
+        click.echo(f"  Test cases saved to {cases_path}")
 
     # Step 3: Generate code
     click.echo("Generating code...")
@@ -105,6 +151,9 @@ def run(doc_path: Path, output: Path, depth: str, model: str | None, fmt: str):
 
     for filename, content in files.items():
         file_path = output / filename
+        if append_mode and file_path.exists():
+            click.echo(f"  Skipped {file_path} (already exists)")
+            continue
         file_path.write_text(content, encoding="utf-8")
         click.echo(f"  Created {file_path}")
 
