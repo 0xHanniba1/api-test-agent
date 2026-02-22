@@ -1,3 +1,5 @@
+from unittest.mock import patch, MagicMock
+
 from api_test_agent.parser.base import ApiEndpoint, Param
 from api_test_agent.generator.layered import LayeredCodeGenerator
 
@@ -63,3 +65,147 @@ class TestTemplateGeneration:
         assert "PetsApi" in conftest
         assert "def users_api" in conftest
         assert "def pets_api" in conftest
+
+
+MOCK_API_RESPONSE = '''```python
+# users_api.py
+from base.client import HttpClient
+
+
+class UsersApi:
+    def __init__(self, client: HttpClient):
+        self.client = client
+
+    def create_user(self, body: dict):
+        return self.client.post("/api/users", json=body)
+
+    def get_user(self, user_id: int):
+        return self.client.get(f"/api/users/{user_id}")
+```'''
+
+MOCK_DATA_RESPONSE = '''```yaml
+# users.yaml
+create_user:
+  valid:
+    body:
+      name: "test"
+      email: "a@b.com"
+    expected_status: 201
+  missing_name:
+    body:
+      email: "a@b.com"
+    expected_status: 400
+```'''
+
+MOCK_SERVICES_RESPONSE = '''```python
+# user_flow.py
+from api.users_api import UsersApi
+
+
+class UserFlow:
+    def __init__(self, api: UsersApi):
+        self.api = api
+
+    def create_and_get(self, body: dict):
+        resp = self.api.create_user(body)
+        user_id = resp.json()["id"]
+        return self.api.get_user(user_id)
+```'''
+
+MOCK_TESTS_RESPONSE = '''```python
+# test_users.py
+import yaml
+from pathlib import Path
+
+DATA_DIR = Path(__file__).parent.parent / "data"
+
+
+def load_data(resource: str) -> dict:
+    with open(DATA_DIR / f"{resource}.yaml") as f:
+        return yaml.safe_load(f)
+
+
+class TestCreateUser:
+    """POST /api/users"""
+    data = load_data("users")["create_user"]
+
+    def test_success(self, users_api):
+        """TC-001: 正常创建用户"""
+        d = self.data["valid"]
+        resp = users_api.create_user(d["body"])
+        assert resp.status_code == d["expected_status"]
+```'''
+
+
+class TestApiLayerGeneration:
+    @patch("api_test_agent.generator.layered.LlmClient")
+    def test_generate_api_layer(self, MockLlmClient):
+        mock_client = MagicMock()
+        mock_client.call.return_value = MOCK_API_RESPONSE
+        MockLlmClient.return_value = mock_client
+
+        endpoints = [
+            _ep("POST", "/api/users", ["users"]),
+            _ep("GET", "/api/users/{id}", ["users"]),
+        ]
+        gen = LayeredCodeGenerator(model="test")
+        result = gen._generate_api_layer("users", endpoints)
+
+        assert "users_api.py" in result[0]
+        assert "class UsersApi" in result[1]
+        mock_client.call.assert_called_once()
+
+
+class TestDataLayerGeneration:
+    @patch("api_test_agent.generator.layered.LlmClient")
+    def test_generate_data_layer(self, MockLlmClient):
+        mock_client = MagicMock()
+        mock_client.call.return_value = MOCK_DATA_RESPONSE
+        MockLlmClient.return_value = mock_client
+
+        testcases_section = "## POST /api/users\n| TC-001 | test | ... |"
+        gen = LayeredCodeGenerator(model="test")
+        result = gen._generate_data_layer("users", testcases_section)
+
+        assert "users.yaml" in result[0]
+        assert "create_user" in result[1]
+        mock_client.call.assert_called_once()
+
+
+class TestServicesLayerGeneration:
+    @patch("api_test_agent.generator.layered.LlmClient")
+    def test_generate_services_layer(self, MockLlmClient):
+        mock_client = MagicMock()
+        mock_client.call.return_value = MOCK_SERVICES_RESPONSE
+        MockLlmClient.return_value = mock_client
+
+        api_code = "class UsersApi:\n    def create_user(self, body): ..."
+        endpoints = [
+            _ep("POST", "/api/users", ["users"]),
+            _ep("GET", "/api/users/{id}", ["users"]),
+        ]
+        gen = LayeredCodeGenerator(model="test")
+        result = gen._generate_services_layer("users", endpoints, api_code)
+
+        assert "user_flow.py" in result[0]
+        assert "class UserFlow" in result[1]
+        mock_client.call.assert_called_once()
+
+
+class TestTestsLayerGeneration:
+    @patch("api_test_agent.generator.layered.LlmClient")
+    def test_generate_tests_layer(self, MockLlmClient):
+        mock_client = MagicMock()
+        mock_client.call.return_value = MOCK_TESTS_RESPONSE
+        MockLlmClient.return_value = mock_client
+
+        testcases_section = "## POST /api/users\n| TC-001 | test | ... |"
+        api_code = "class UsersApi:\n    def create_user(self, body): ..."
+        data_content = "create_user:\n  valid:\n    body: {}\n    expected_status: 201"
+        gen = LayeredCodeGenerator(model="test")
+        result = gen._generate_tests_layer("users", testcases_section, api_code, data_content)
+
+        assert "test_users.py" in result[0]
+        assert "class TestCreateUser" in result[1]
+        assert "load_data" in result[1]
+        mock_client.call.assert_called_once()

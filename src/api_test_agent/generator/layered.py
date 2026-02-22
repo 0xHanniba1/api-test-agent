@@ -85,3 +85,76 @@ pyyaml>=6.0
                 f"    return {class_name}(client)",
             ])
         return "\n".join(imports + fixtures) + "\n"
+
+    # -- shared helpers -------------------------------------------------------
+
+    def _extract_code(self, response: str, lang: str = "python") -> str:
+        """Extract code from markdown code block."""
+        pattern = rf"```{lang}\s*\n(.*?)```"
+        match = re.search(pattern, response, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        return response.strip()
+
+    def _extract_filename(self, code: str, default: str) -> str:
+        """Extract filename from first-line comment like '# users_api.py'."""
+        first_line = code.split("\n")[0]
+        match = re.search(r"#\s*(\S+\.\w+)", first_line)
+        return match.group(1) if match else default
+
+    # -- LLM-based layer generation -------------------------------------------
+
+    def _generate_api_layer(self, tag: str, endpoints: list[ApiEndpoint]) -> tuple[str, str]:
+        """Generate API wrapper class for a tag group. Returns (filename, code)."""
+        prompt = (PROMPTS_DIR / "layered_api.md").read_text(encoding="utf-8")
+        endpoints_json = "\n".join(ep.model_dump_json(indent=2) for ep in endpoints)
+        response = self.client.call(
+            system=prompt,
+            user=f"为 tag '{tag}' 下的以下接口生成封装类：\n\n{endpoints_json}",
+        )
+        code = self._extract_code(response, "python")
+        filename = self._extract_filename(code, f"{tag}_api.py")
+        return filename, code
+
+    def _generate_data_layer(self, tag: str, testcases_section: str) -> tuple[str, str]:
+        """Generate YAML test data file for a tag group. Returns (filename, content)."""
+        prompt = (PROMPTS_DIR / "layered_data.md").read_text(encoding="utf-8")
+        response = self.client.call(
+            system=prompt,
+            user=f"为 tag '{tag}' 从以下测试用例中提取测试数据：\n\n{testcases_section}",
+        )
+        content = self._extract_code(response, "yaml")
+        filename = self._extract_filename(content, f"{tag}.yaml")
+        return filename, content
+
+    def _generate_services_layer(self, tag: str, endpoints: list[ApiEndpoint], api_code: str) -> tuple[str, str]:
+        """Generate business flow class for a tag group. Returns (filename, code)."""
+        prompt = (PROMPTS_DIR / "layered_services.md").read_text(encoding="utf-8")
+        endpoints_json = "\n".join(ep.model_dump_json(indent=2) for ep in endpoints)
+        response = self.client.call(
+            system=prompt,
+            user=(
+                f"为 tag '{tag}' 生成业务编排类。\n\n"
+                f"已有的接口封装类：\n```python\n{api_code}\n```\n\n"
+                f"接口定义：\n{endpoints_json}"
+            ),
+        )
+        code = self._extract_code(response, "python")
+        filename = self._extract_filename(code, f"{tag}_flow.py")
+        return filename, code
+
+    def _generate_tests_layer(self, tag: str, testcases_section: str, api_code: str, data_content: str) -> tuple[str, str]:
+        """Generate test file for a tag group. Returns (filename, code)."""
+        prompt = (PROMPTS_DIR / "layered_tests.md").read_text(encoding="utf-8")
+        response = self.client.call(
+            system=prompt,
+            user=(
+                f"为 tag '{tag}' 生成测试代码。\n\n"
+                f"测试用例：\n{testcases_section}\n\n"
+                f"接口封装类：\n```python\n{api_code}\n```\n\n"
+                f"测试数据文件 ({tag}.yaml)：\n```yaml\n{data_content}\n```"
+            ),
+        )
+        code = self._extract_code(response, "python")
+        filename = self._extract_filename(code, f"test_{tag}.py")
+        return filename, code
