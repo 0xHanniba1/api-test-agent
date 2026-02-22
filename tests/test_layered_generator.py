@@ -250,6 +250,45 @@ class TestSectionExtraction:
         assert "GET /api/pets" not in section
 
 
+MOCK_PETS_API_RESPONSE = '''```python
+# pets_api.py
+from base.client import HttpClient
+
+
+class PetsApi:
+    def __init__(self, client: HttpClient):
+        self.client = client
+
+    def list_pets(self):
+        return self.client.get("/api/pets")
+```'''
+
+MOCK_PETS_DATA_RESPONSE = '''```yaml
+# pets.yaml
+list_pets:
+  valid:
+    expected_status: 200
+```'''
+
+MOCK_PETS_SERVICES_RESPONSE = '''```python
+# pet_flow.py
+from api.pets_api import PetsApi
+
+
+class PetFlow:
+    def __init__(self, api: PetsApi):
+        self.api = api
+```'''
+
+MOCK_PETS_TESTS_RESPONSE = '''```python
+# test_pets.py
+class TestListPets:
+    def test_success(self, pets_api):
+        resp = pets_api.list_pets()
+        assert resp.status_code == 200
+```'''
+
+
 class TestLayeredGenerate:
     @patch("api_test_agent.generator.layered.LlmClient")
     def test_generate_returns_all_layers(self, MockLlmClient):
@@ -286,3 +325,46 @@ class TestLayeredGenerate:
         assert any("test_" in k for k in files)
 
         assert mock_client.call.call_count == 4
+
+    @patch("api_test_agent.generator.layered.LlmClient")
+    def test_generate_multi_tag(self, MockLlmClient):
+        """Test with 2 tags: users + pets — should produce 8 LLM calls."""
+        mock_client = MagicMock()
+        mock_client.call.side_effect = [
+            # pets tag (alphabetically first)
+            MOCK_PETS_API_RESPONSE,
+            MOCK_PETS_DATA_RESPONSE,
+            MOCK_PETS_SERVICES_RESPONSE,
+            MOCK_PETS_TESTS_RESPONSE,
+            # users tag
+            MOCK_API_RESPONSE,
+            MOCK_DATA_RESPONSE,
+            MOCK_SERVICES_RESPONSE,
+            MOCK_TESTS_RESPONSE,
+        ]
+        MockLlmClient.return_value = mock_client
+
+        endpoints = [
+            _ep("POST", "/api/users", ["users"]),
+            _ep("GET", "/api/users/{id}", ["users"]),
+            _ep("GET", "/api/pets", ["pets"]),
+        ]
+        gen = LayeredCodeGenerator(model="test")
+        files = gen.generate(SAMPLE_TESTCASES, endpoints)
+
+        # Both tags should have api, data, services, tests files
+        assert "api/users_api.py" in files
+        assert "api/pets_api.py" in files
+        assert "data/users.yaml" in files
+        assert "data/pets.yaml" in files
+        assert "services/user_flow.py" in files
+        assert "services/pet_flow.py" in files
+        assert "tests/test_users.py" in files
+        assert "tests/test_pets.py" in files
+
+        # Conftest should have fixtures for both
+        conftest = files["tests/conftest.py"]
+        assert "UsersApi" in conftest
+        assert "PetsApi" in conftest
+
+        assert mock_client.call.call_count == 8

@@ -100,7 +100,7 @@ pyyaml>=6.0
         for section in all_sections:
             header = section.split("\n")[0]
             for ep in endpoints:
-                if ep.method in header and ep.path in header:
+                if re.search(rf"\b{ep.method}\b", header) and ep.path in header:
                     matching.append(section)
                     break
         return "\n\n".join(matching)
