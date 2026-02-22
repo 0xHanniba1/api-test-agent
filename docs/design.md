@@ -63,7 +63,8 @@ api-test-agent/
 │       ├── generator/          # 生成器
 │       │   ├── testcase.py     # 测试用例生成（LLM）
 │       │   ├── code.py         # 代码生成 - 平铺模式（LLM）
-│       │   └── layered.py     # 代码生成 - 分层架构模式（LLM + 模板）
+│       │   ├── layered.py     # 代码生成 - 分层架构模式（LLM + 模板）
+│       │   └── validator.py   # 生成代码质量校验
 │       ├── skills/             # 可插拔测试知识模块
 │       │   ├── loader.py       # skill 加载与选择逻辑
 │       │   ├── base.md         # 基础测试规则（始终加载）
@@ -310,6 +311,42 @@ output/
 | conftest, requirements | 代码模板 | 无 |
 
 `LayeredCodeGenerator` 需要 `testcases_md` + `endpoints` 两个输入（endpoints 用于按 tag 分组和读取接口签名）。
+
+### 3.5 代码质量校验（Validator）
+
+生成代码后自动执行质量校验，失败时将错误反馈给 LLM 重试（最多 2 次）。
+
+#### 校验项
+
+| 校验 | 方式 | 检查内容 |
+|------|------|---------|
+| Python 语法 | `ast.parse(code)` | SyntaxError、缩进错误 |
+| YAML 格式 | `yaml.safe_load(content)` | YAML 解析错误 |
+| pytest collect | `pytest --collect-only` | import 缺失、fixture 名错误、类名不符合规范 |
+
+#### 校验流程
+
+```
+generate() 生成文件
+       ↓
+  validate_files()
+  ├── validate_python()  — ast.parse 检查所有 .py 文件
+  ├── validate_yaml()    — yaml.safe_load 检查所有 .yaml 文件
+  └── validate_collect() — 仅语法通过后执行 pytest --collect-only
+       ↓
+   通过？── 是 → 输出文件
+       │
+      否（重试 ≤ 2 次）
+       ↓
+   错误反馈给 LLM，只重新生成出错的文件
+       ↓
+   再次 validate_files() → 循环
+```
+
+**关键设计点：**
+- 只重新生成出错的文件，不重新生成整个项目
+- pytest collect 需要临时目录（先将全部文件写入临时目录再执行）
+- flat 和 layered 两种模式共用同一套校验逻辑
 
 ---
 

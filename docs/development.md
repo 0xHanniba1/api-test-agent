@@ -35,7 +35,8 @@ src/api_test_agent/
 ├── generator/          # 生成器
 │   ├── testcase.py     # 测试用例生成（LLM + Skills）
 │   ├── code.py         # pytest 代码生成 - 平铺模式（LLM）
-│   └── layered.py     # pytest 代码生成 - 分层架构模式（LLM + 模板）
+│   ├── layered.py     # pytest 代码生成 - 分层架构模式（LLM + 模板）
+│   └── validator.py   # 生成代码质量校验（语法/YAML/collect）
 ├── skills/             # 可插拔测试知识模块
 │   ├── loader.py       # Skill 选择与加载
 │   ├── base.md         # 基础测试规则
