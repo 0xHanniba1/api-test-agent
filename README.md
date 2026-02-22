@@ -109,10 +109,16 @@ output/
 ├── tests/             # 用例与执行层
 │   ├── conftest.py
 │   └── test_users.py
+├── Jenkinsfile        # Jenkins Pipeline（参数化构建 + JUnit 报告）
 └── requirements.txt
 ```
 
 接口按 tag 分组，每个 tag 在各层生成对应文件。测试代码通过 api 层调用接口，从 YAML 文件加载测试数据，不直接使用 requests。
+
+生成的 `Jenkinsfile` 支持：
+- 参数化构建：通过 `ENV` 参数选择 dev/staging/prod 环境
+- Token 安全管理：通过 Jenkins Credentials 注入 `api-token`
+- JUnit 报告：自动收集 `reports/*.xml` 展示测试结果
 
 ## 配置
 

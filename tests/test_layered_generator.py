@@ -66,6 +66,16 @@ class TestTemplateGeneration:
         assert "def users_api" in conftest
         assert "def pets_api" in conftest
 
+    def test_generate_jenkinsfile(self):
+        gen = LayeredCodeGenerator.__new__(LayeredCodeGenerator)
+        jf = gen._render_jenkinsfile()
+        assert "pipeline {" in jf
+        assert "credentials('api-token')" in jf
+        assert "pytest tests/" in jf
+        assert "--junitxml=" in jf
+        assert "junit 'reports/*.xml'" in jf
+        assert "params.ENV" in jf
+
 
 MOCK_API_RESPONSE = '''```python
 # users_api.py
@@ -313,6 +323,7 @@ class TestLayeredGenerate:
         assert "base/config.py" in files
         assert "base/client.py" in files
         assert "requirements.txt" in files
+        assert "Jenkinsfile" in files
 
         # Dynamic files
         assert "api/__init__.py" in files

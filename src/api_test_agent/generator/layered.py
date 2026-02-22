@@ -65,6 +65,41 @@ pytest>=7.0
 pyyaml>=6.0
 '''
 
+    def _render_jenkinsfile(self) -> str:
+        return '''pipeline {
+    agent any
+
+    parameters {
+        choice(name: 'ENV', choices: ['dev', 'staging', 'prod'], description: '选择测试环境')
+    }
+
+    environment {
+        API_BASE_URL = "${params.ENV == 'prod' ? 'https://api.example.com' : params.ENV == 'staging' ? 'https://staging-api.example.com' : 'http://dev-api.example.com'}"
+        API_TOKEN = credentials('api-token')
+    }
+
+    stages {
+        stage('Install') {
+            steps {
+                sh 'pip install -r requirements.txt'
+            }
+        }
+
+        stage('Test') {
+            steps {
+                sh 'pytest tests/ -v --junitxml=reports/junit.xml'
+            }
+        }
+    }
+
+    post {
+        always {
+            junit 'reports/*.xml'
+        }
+    }
+}
+'''
+
     def _render_conftest(self, tag_names: list[str]) -> str:
         imports = ["import pytest", "from base.client import HttpClient"]
         fixtures = [
@@ -121,8 +156,9 @@ pyyaml>=6.0
         files["base/config.py"] = self._render_config()
         files["base/client.py"] = self._render_client()
 
-        # Static: requirements
+        # Static: requirements + Jenkinsfile
         files["requirements.txt"] = self._render_requirements()
+        files["Jenkinsfile"] = self._render_jenkinsfile()
 
         # Init files for other layers
         files["api/__init__.py"] = ""
