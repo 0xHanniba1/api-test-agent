@@ -2,6 +2,80 @@
 
 API 文档 → 测试用例 → pytest+requests 自动化代码，一键生成。
 
+## 工具架构
+
+### 整体流水线
+
+```
+                          api-test-agent
+┌──────────────────────────────────────────────────────────────┐
+│                                                              │
+│  ┌─────────┐    ┌───────────────┐    ┌──────────────────┐   │
+│  │ Parser  │    │  TestCase     │    │  Code            │   │
+│  │         │───>│  Generator    │───>│  Generator       │   │
+│  │ 文档解析 │    │  用例生成      │    │  代码生成         │   │
+│  └─────────┘    └───────────────┘    └──────────────────┘   │
+│       │                │                     │               │
+│       │                │                     ├─ flat 模式     │
+│       │                │                     └─ layered 模式  │
+│  ┌─────────┐    ┌───────────────┐                            │
+│  │ 格式检测 │    │    Skills     │                            │
+│  │ auto    │    │  可插拔知识模块 │                            │
+│  └─────────┘    └───────────────┘                            │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### 三阶段流水线
+
+| 阶段 | 模块 | 输入 | 输出 | LLM 调用 |
+|------|------|------|------|---------|
+| **1. 解析** | `parser/` | API 文档（Swagger/Postman/Markdown） | `ApiEndpoint` 统一结构 | Markdown 格式需要 |
+| **2. 生成用例** | `generator/testcase.py` + `skills/` | `ApiEndpoint` + 深度级别 | 测试用例文档（Markdown 表格） | 每接口 1 次 |
+| **3. 生成代码** | `generator/code.py` 或 `layered.py` | 测试用例文档（+ endpoints） | pytest 代码文件 | flat: 每接口 1 次, layered: 每 tag 4 次 |
+
+每个阶段可独立运行：`gen-cases` 只执行 1→2，`gen-code` 只执行 3，`run` 执行 1→2→3。
+
+### 项目结构
+
+```
+src/api_test_agent/
+├── cli.py                 # CLI 入口（Click），命令定义和参数解析
+├── llm.py                 # LLM 调用封装（litellm），支持 Claude/GPT/Gemini
+├── parser/                # 文档解析器 —— 将各种格式统一为 ApiEndpoint
+│   ├── base.py            #   数据模型：ApiEndpoint, Param（Pydantic）
+│   ├── detect.py          #   格式自动检测
+│   ├── swagger.py         #   OpenAPI/Swagger 解析（直接解析，无需 LLM）
+│   ├── postman.py         #   Postman Collection 解析（直接解析）
+│   └── markdown.py        #   自由文本解析（通过 LLM 提取）
+├── generator/             # 代码生成器
+│   ├── testcase.py        #   测试用例 Markdown 生成（LLM + Skills 驱动）
+│   ├── code.py            #   平铺模式：每接口一个 test_*.py
+│   └── layered.py         #   分层模式：五层架构项目（LLM + 模板）
+├── skills/                # 可插拔测试知识 —— Markdown 文件注入 LLM prompt
+│   ├── loader.py          #   根据接口特征自动选择 skills
+│   ├── base.md            #   基础测试规则（始终加载）
+│   ├── param-validation.md    # 有参数时加载
+│   ├── pagination.md          # 有分页参数时加载
+│   ├── file-upload.md         # multipart/form-data 时加载
+│   ├── auth-testing.md        # depth=full 时加载
+│   └── idempotency.md         # depth=full 时加载
+└── prompts/               # LLM Prompt 模板
+    ├── testcase.md        #   用例生成输出格式规范
+    ├── code.md            #   平铺模式代码生成规则
+    ├── layered_api.md     #   分层 - 接口封装层
+    ├── layered_data.md    #   分层 - 数据层 YAML
+    ├── layered_services.md    # 分层 - 业务编排层
+    └── layered_tests.md       # 分层 - 用例层
+```
+
+### 核心设计决策
+
+- **流水线架构，非 Agent** — 流程固定（解析→用例→代码），不需要 LLM 自主决策循环
+- **Skills 驱动测试质量** — 测试知识以 Markdown 文件存在，注入 LLM system prompt，易于扩展和版本管理
+- **Markdown 作为中间格式** — 测试用例文档是两个生成阶段之间的契约，可人工审核和编辑
+- **多模型支持** — 通过 litellm 统一调用 Claude/GPT/Gemini 等，一行切换模型
+
 ## 安装
 
 ```bash
