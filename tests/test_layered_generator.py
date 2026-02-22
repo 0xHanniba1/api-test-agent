@@ -300,8 +300,9 @@ class TestListPets:
 
 
 class TestLayeredGenerate:
+    @patch("api_test_agent.generator.layered.validate_files", return_value={})
     @patch("api_test_agent.generator.layered.LlmClient")
-    def test_generate_returns_all_layers(self, MockLlmClient):
+    def test_generate_returns_all_layers(self, MockLlmClient, _mock_validate):
         mock_client = MagicMock()
         mock_client.call.side_effect = [
             MOCK_API_RESPONSE,      # api layer for users
@@ -337,8 +338,9 @@ class TestLayeredGenerate:
 
         assert mock_client.call.call_count == 4
 
+    @patch("api_test_agent.generator.layered.validate_files", return_value={})
     @patch("api_test_agent.generator.layered.LlmClient")
-    def test_generate_multi_tag(self, MockLlmClient):
+    def test_generate_multi_tag(self, MockLlmClient, _mock_validate):
         """Test with 2 tags: users + pets — should produce 8 LLM calls."""
         mock_client = MagicMock()
         mock_client.call.side_effect = [
@@ -379,3 +381,58 @@ class TestLayeredGenerate:
         assert "PetsApi" in conftest
 
         assert mock_client.call.call_count == 8
+
+
+class TestLayeredValidation:
+    @patch("api_test_agent.generator.layered.validate_files")
+    @patch("api_test_agent.generator.layered.LlmClient")
+    def test_retries_on_validation_error(self, MockLlmClient, mock_validate):
+        mock_client = MagicMock()
+        mock_client.call.side_effect = [
+            MOCK_API_RESPONSE,       # api layer
+            MOCK_DATA_RESPONSE,      # data layer
+            MOCK_SERVICES_RESPONSE,  # services layer
+            MOCK_TESTS_RESPONSE,     # tests layer
+            MOCK_API_RESPONSE,       # retry: fixed api
+        ]
+        MockLlmClient.return_value = mock_client
+
+        mock_validate.side_effect = [
+            {"api/users_api.py": "SyntaxError: line 3"},
+            {},
+        ]
+
+        endpoints = [
+            _ep("POST", "/api/users", ["users"]),
+            _ep("GET", "/api/users/{id}", ["users"]),
+        ]
+        gen = LayeredCodeGenerator(model="test")
+        files = gen.generate(SAMPLE_TESTCASES, endpoints)
+
+        assert isinstance(files, dict)
+        assert mock_validate.call_count == 2
+        assert mock_client.call.call_count == 5  # 4 layers + 1 retry
+
+    @patch("api_test_agent.generator.layered.validate_files")
+    @patch("api_test_agent.generator.layered.LlmClient")
+    def test_no_retry_when_valid(self, MockLlmClient, mock_validate):
+        mock_client = MagicMock()
+        mock_client.call.side_effect = [
+            MOCK_API_RESPONSE,
+            MOCK_DATA_RESPONSE,
+            MOCK_SERVICES_RESPONSE,
+            MOCK_TESTS_RESPONSE,
+        ]
+        MockLlmClient.return_value = mock_client
+
+        mock_validate.return_value = {}
+
+        endpoints = [
+            _ep("POST", "/api/users", ["users"]),
+            _ep("GET", "/api/users/{id}", ["users"]),
+        ]
+        gen = LayeredCodeGenerator(model="test")
+        files = gen.generate(SAMPLE_TESTCASES, endpoints)
+
+        assert mock_validate.call_count == 1
+        assert mock_client.call.call_count == 4

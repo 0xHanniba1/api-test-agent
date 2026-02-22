@@ -3,10 +3,15 @@
 import re
 from pathlib import Path
 
+import click
+
+from api_test_agent.generator.validator import validate_files
 from api_test_agent.llm import LlmClient
 from api_test_agent.parser.base import ApiEndpoint
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+
+MAX_RETRIES = 2
 
 
 class LayeredCodeGenerator:
@@ -188,6 +193,19 @@ pyyaml>=6.0
         # Static: conftest (needs tag_names for fixtures)
         files["tests/conftest.py"] = self._render_conftest(tag_names)
 
+        # Validate and retry
+        for attempt in range(MAX_RETRIES + 1):
+            errors = validate_files(files)
+            if not errors:
+                break
+            if attempt < MAX_RETRIES:
+                click.echo(f"  Validation errors (attempt {attempt + 1}), retrying...")
+                files = self._retry_failed(files, errors)
+            else:
+                click.echo(f"  Validation errors after {MAX_RETRIES} retries:")
+                for fname, err in errors.items():
+                    click.echo(f"    {fname}: {err}")
+
         return files
 
     # -- shared helpers -------------------------------------------------------
@@ -205,6 +223,33 @@ pyyaml>=6.0
         first_line = code.split("\n")[0]
         match = re.search(r"#\s*(\S+\.\w+)", first_line)
         return match.group(1) if match else default
+
+    def _retry_failed(self, files: dict[str, str], errors: dict[str, str]) -> dict[str, str]:
+        """Re-generate files that failed validation."""
+        for filepath, error_msg in errors.items():
+            if filepath == "_collect" or filepath not in files:
+                continue
+            if filepath.endswith(".py"):
+                response = self.client.call(
+                    system="你是一个代码修复助手。只输出一个 ```python 代码块，不要任何解释。",
+                    user=(
+                        f"请修复以下 Python 代码的错误并重新生成。\n\n"
+                        f"错误信息：{error_msg}\n\n"
+                        f"原始代码：\n```python\n{files[filepath]}\n```"
+                    ),
+                )
+                files[filepath] = self._extract_code(response, "python")
+            elif filepath.endswith((".yaml", ".yml")):
+                response = self.client.call(
+                    system="你是一个代码修复助手。只输出一个 ```yaml 代码块，不要任何解释。",
+                    user=(
+                        f"请修复以下 YAML 文件的格式错误并重新生成。\n\n"
+                        f"错误信息：{error_msg}\n\n"
+                        f"原始内容：\n```yaml\n{files[filepath]}\n```"
+                    ),
+                )
+                files[filepath] = self._extract_code(response, "yaml")
+        return files
 
     # -- LLM-based layer generation -------------------------------------------
 

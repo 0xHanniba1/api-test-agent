@@ -3,9 +3,14 @@
 import re
 from pathlib import Path
 
+import click
+
+from api_test_agent.generator.validator import validate_files
 from api_test_agent.llm import LlmClient
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+
+MAX_RETRIES = 2
 
 
 class CodeGenerator:
@@ -31,6 +36,19 @@ class CodeGenerator:
             filename, code = self._generate_test_file(section)
             if filename and code:
                 files[filename] = code
+
+        # Validate and retry
+        for attempt in range(MAX_RETRIES + 1):
+            errors = validate_files(files)
+            if not errors:
+                break
+            if attempt < MAX_RETRIES:
+                click.echo(f"  Validation errors (attempt {attempt + 1}), retrying...")
+                files = self._retry_failed(files, errors)
+            else:
+                click.echo(f"  Validation errors after {MAX_RETRIES} retries:")
+                for fname, err in errors.items():
+                    click.echo(f"    {fname}: {err}")
 
         return files
 
@@ -75,3 +93,20 @@ class CodeGenerator:
         if match:
             return match.group(1)
         return "test_generated.py"
+
+    def _retry_failed(self, files: dict[str, str], errors: dict[str, str]) -> dict[str, str]:
+        """Re-generate files that failed validation."""
+        prompt_template = (PROMPTS_DIR / "code.md").read_text(encoding="utf-8")
+        for filename, error_msg in errors.items():
+            if filename == "_collect":
+                continue
+            if filename.endswith(".py") and filename in files:
+                response = self.client.call(
+                    system=prompt_template,
+                    user=(
+                        f"上次生成的 {filename} 有错误：{error_msg}\n\n"
+                        f"请修复并重新生成。原始代码：\n```python\n{files[filename]}\n```"
+                    ),
+                )
+                files[filename] = self._extract_code(response)
+        return files
