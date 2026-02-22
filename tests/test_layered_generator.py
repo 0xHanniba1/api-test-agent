@@ -209,3 +209,80 @@ class TestTestsLayerGeneration:
         assert "class TestCreateUser" in result[1]
         assert "load_data" in result[1]
         mock_client.call.assert_called_once()
+
+
+SAMPLE_TESTCASES = """## POST /api/users
+
+> Create user
+
+| 编号 | 场景 | 输入 | 预期状态码 | 预期响应 | 优先级 |
+|------|------|------|-----------|---------|--------|
+| TC-001 | 正常创建用户 | {} | 201 | ok | P0 |
+
+## GET /api/users/{id}
+
+> Get user by ID
+
+| 编号 | 场景 | 输入 | 预期状态码 | 预期响应 | 优先级 |
+|------|------|------|-----------|---------|--------|
+| TC-002 | 正常查询 | id=1 | 200 | ok | P0 |
+
+## GET /api/pets
+
+> List pets
+
+| 编号 | 场景 | 输入 | 预期状态码 | 预期响应 | 优先级 |
+|------|------|------|-----------|---------|--------|
+| TC-003 | 正常查询 | {} | 200 | ok | P0 |
+"""
+
+
+class TestSectionExtraction:
+    def test_extract_sections_for_tag(self):
+        endpoints = [
+            _ep("POST", "/api/users", ["users"]),
+            _ep("GET", "/api/users/{id}", ["users"]),
+        ]
+        gen = LayeredCodeGenerator.__new__(LayeredCodeGenerator)
+        section = gen._extract_sections_for_endpoints(SAMPLE_TESTCASES, endpoints)
+        assert "POST /api/users" in section
+        assert "GET /api/users/{id}" in section
+        assert "GET /api/pets" not in section
+
+
+class TestLayeredGenerate:
+    @patch("api_test_agent.generator.layered.LlmClient")
+    def test_generate_returns_all_layers(self, MockLlmClient):
+        mock_client = MagicMock()
+        mock_client.call.side_effect = [
+            MOCK_API_RESPONSE,      # api layer for users
+            MOCK_DATA_RESPONSE,     # data layer for users
+            MOCK_SERVICES_RESPONSE, # services layer for users
+            MOCK_TESTS_RESPONSE,    # tests layer for users
+        ]
+        MockLlmClient.return_value = mock_client
+
+        endpoints = [
+            _ep("POST", "/api/users", ["users"]),
+            _ep("GET", "/api/users/{id}", ["users"]),
+        ]
+        gen = LayeredCodeGenerator(model="test")
+        files = gen.generate(SAMPLE_TESTCASES, endpoints)
+
+        # Static files
+        assert "base/__init__.py" in files
+        assert "base/config.py" in files
+        assert "base/client.py" in files
+        assert "requirements.txt" in files
+
+        # Dynamic files
+        assert "api/__init__.py" in files
+        assert any("_api.py" in k for k in files)
+        assert any(".yaml" in k for k in files)
+        assert "services/__init__.py" in files
+        assert any("_flow.py" in k for k in files)
+        assert "tests/__init__.py" in files
+        assert "tests/conftest.py" in files
+        assert any("test_" in k for k in files)
+
+        assert mock_client.call.call_count == 4

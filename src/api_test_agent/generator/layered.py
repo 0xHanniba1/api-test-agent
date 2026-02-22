@@ -86,6 +86,74 @@ pyyaml>=6.0
             ])
         return "\n".join(imports + fixtures) + "\n"
 
+    # -- section extraction ---------------------------------------------------
+
+    def _split_sections(self, markdown: str) -> list[str]:
+        """Split Markdown into sections by ## headers."""
+        sections = re.split(r"(?=^## )", markdown, flags=re.MULTILINE)
+        return [s.strip() for s in sections if s.strip() and s.strip().startswith("##")]
+
+    def _extract_sections_for_endpoints(self, testcases_md: str, endpoints: list[ApiEndpoint]) -> str:
+        """Extract testcase sections that match the given endpoints."""
+        all_sections = self._split_sections(testcases_md)
+        matching = []
+        for section in all_sections:
+            header = section.split("\n")[0]
+            for ep in endpoints:
+                if ep.method in header and ep.path in header:
+                    matching.append(section)
+                    break
+        return "\n\n".join(matching)
+
+    # -- orchestration --------------------------------------------------------
+
+    def generate(self, testcases_md: str, endpoints: list[ApiEndpoint]) -> dict[str, str]:
+        """Generate all files for the layered architecture.
+
+        Returns dict of {filepath: content} with paths like 'base/config.py'.
+        """
+        files: dict[str, str] = {}
+        groups = self._group_by_tag(endpoints)
+        tag_names = sorted(groups.keys())
+
+        # Static: base layer
+        files["base/__init__.py"] = ""
+        files["base/config.py"] = self._render_config()
+        files["base/client.py"] = self._render_client()
+
+        # Static: requirements
+        files["requirements.txt"] = self._render_requirements()
+
+        # Init files for other layers
+        files["api/__init__.py"] = ""
+        files["services/__init__.py"] = ""
+        files["tests/__init__.py"] = ""
+
+        # Dynamic: per-tag generation
+        for tag, tag_endpoints in groups.items():
+            testcases_section = self._extract_sections_for_endpoints(testcases_md, tag_endpoints)
+
+            # API layer
+            api_filename, api_code = self._generate_api_layer(tag, tag_endpoints)
+            files[f"api/{api_filename}"] = api_code
+
+            # Data layer
+            data_filename, data_content = self._generate_data_layer(tag, testcases_section)
+            files[f"data/{data_filename}"] = data_content
+
+            # Services layer
+            svc_filename, svc_code = self._generate_services_layer(tag, tag_endpoints, api_code)
+            files[f"services/{svc_filename}"] = svc_code
+
+            # Tests layer
+            test_filename, test_code = self._generate_tests_layer(tag, testcases_section, api_code, data_content)
+            files[f"tests/{test_filename}"] = test_code
+
+        # Static: conftest (needs tag_names for fixtures)
+        files["tests/conftest.py"] = self._render_conftest(tag_names)
+
+        return files
+
     # -- shared helpers -------------------------------------------------------
 
     def _extract_code(self, response: str, lang: str = "python") -> str:
