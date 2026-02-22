@@ -11,6 +11,7 @@ from api_test_agent.parser.swagger import parse_openapi
 from api_test_agent.parser.postman import parse_postman
 from api_test_agent.generator.testcase import TestCaseGenerator
 from api_test_agent.generator.code import CodeGenerator
+from api_test_agent.generator.layered import LayeredCodeGenerator
 
 
 def _parse_doc(file_path: Path, fmt: str) -> list[ApiEndpoint]:
@@ -92,18 +93,31 @@ def gen_cases(doc_path: Path, output: Path, depth: str, model: str | None, fmt: 
 @click.option("-o", "--output", required=True, type=click.Path(path_type=Path), help="Output directory for generated code.")
 @click.option("--model", default=None, help="LLM model to use.")
 @click.option("--append", "append_mode", is_flag=True, default=False, help="Skip existing files instead of overwriting.")
-def gen_code(cases_path: Path, output: Path, model: str | None, append_mode: bool):
+@click.option("--arch", default="flat", type=click.Choice(["flat", "layered"]), help="Code architecture style.")
+@click.option("--doc", default=None, type=click.Path(exists=True, path_type=Path), help="API doc file (required for --arch layered).")
+@click.option("--format", "doc_fmt", default="auto", type=click.Choice(["auto", "swagger", "postman", "markdown"]), help="Document format (used with --doc).")
+def gen_code(cases_path: Path, output: Path, model: str | None, append_mode: bool, arch: str, doc: Path | None, doc_fmt: str):
     """Generate pytest+requests code from test case document."""
     click.echo(f"Reading test cases from {cases_path}...")
     testcases = cases_path.read_text(encoding="utf-8")
 
-    click.echo("Generating code...")
-    gen = CodeGenerator(model=model)
-    files = gen.generate(testcases)
+    if arch == "layered":
+        if doc is None:
+            raise click.UsageError("--doc is required when using --arch layered")
+        click.echo(f"Parsing {doc} (format: {doc_fmt})...")
+        endpoints = _parse_doc(doc, doc_fmt)
+        click.echo("Generating layered code...")
+        gen = LayeredCodeGenerator(model=model)
+        files = gen.generate(testcases, endpoints)
+    else:
+        click.echo("Generating code...")
+        gen = CodeGenerator(model=model)
+        files = gen.generate(testcases)
 
     output.mkdir(parents=True, exist_ok=True)
     for filename, content in files.items():
         file_path = output / filename
+        file_path.parent.mkdir(parents=True, exist_ok=True)
         if append_mode and file_path.exists():
             click.echo(f"  Skipped {file_path} (already exists)")
             continue
@@ -121,7 +135,8 @@ def gen_code(cases_path: Path, output: Path, model: str | None, append_mode: boo
 @click.option("--format", "fmt", default="auto", type=click.Choice(["auto", "swagger", "postman", "markdown"]), help="Document format.")
 @click.option("--filter", "filters", multiple=True, help="Filter endpoints by pattern, e.g. 'POST /pets' or '/pets/*'.")
 @click.option("--append", "append_mode", is_flag=True, default=False, help="Append test cases and skip existing code files.")
-def run(doc_path: Path, output: Path, depth: str, model: str | None, fmt: str, filters: tuple[str], append_mode: bool):
+@click.option("--arch", default="flat", type=click.Choice(["flat", "layered"]), help="Code architecture style.")
+def run(doc_path: Path, output: Path, depth: str, model: str | None, fmt: str, filters: tuple[str], append_mode: bool, arch: str):
     """Full pipeline: parse doc -> generate test cases -> generate code."""
     # Step 1: Parse
     click.echo(f"Parsing {doc_path} (format: {fmt})...")
@@ -145,12 +160,18 @@ def run(doc_path: Path, output: Path, depth: str, model: str | None, fmt: str, f
         click.echo(f"  Test cases saved to {cases_path}")
 
     # Step 3: Generate code
-    click.echo("Generating code...")
-    code_gen = CodeGenerator(model=model)
-    files = code_gen.generate(testcases)
+    if arch == "layered":
+        click.echo("Generating layered code...")
+        code_gen = LayeredCodeGenerator(model=model)
+        files = code_gen.generate(testcases, endpoints)
+    else:
+        click.echo("Generating code...")
+        code_gen = CodeGenerator(model=model)
+        files = code_gen.generate(testcases)
 
     for filename, content in files.items():
         file_path = output / filename
+        file_path.parent.mkdir(parents=True, exist_ok=True)
         if append_mode and file_path.exists():
             click.echo(f"  Skipped {file_path} (already exists)")
             continue

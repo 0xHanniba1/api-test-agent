@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
 from api_test_agent.cli import main, _filter_endpoints
 from api_test_agent.parser.base import ApiEndpoint
+from api_test_agent.generator.layered import LayeredCodeGenerator
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -172,3 +173,75 @@ class TestAppendMode:
         assert result.exit_code == 0
         assert existing.read_text(encoding="utf-8") == "# original conftest"
         assert (output_dir / "test_pets.py").read_text(encoding="utf-8") == "# new test"
+
+
+class TestCliGenCodeLayered:
+    @patch("api_test_agent.cli.LayeredCodeGenerator")
+    def test_gen_code_layered_requires_doc(self, MockGen, tmp_path):
+        """--arch layered requires --doc for endpoint info."""
+        cases_file = tmp_path / "cases.md"
+        cases_file.write_text("## POST /api/users\n| TC-001 | test | ... |")
+
+        mock_gen = MagicMock()
+        mock_gen.generate.return_value = {
+            "base/config.py": "# config",
+            "tests/test_users.py": "# test",
+        }
+        MockGen.return_value = mock_gen
+
+        output_dir = tmp_path / "output"
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "gen-code", str(cases_file),
+            "-o", str(output_dir),
+            "--arch", "layered",
+            "--doc", str(FIXTURES / "petstore.yaml"),
+        ])
+
+        assert result.exit_code == 0
+        MockGen.assert_called_once()
+
+    @patch("api_test_agent.cli.LayeredCodeGenerator")
+    def test_gen_code_layered_without_doc_fails(self, MockGen, tmp_path):
+        """--arch layered without --doc should error."""
+        cases_file = tmp_path / "cases.md"
+        cases_file.write_text("## POST /api/users\n| TC-001 | test | ... |")
+
+        output_dir = tmp_path / "output"
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "gen-code", str(cases_file),
+            "-o", str(output_dir),
+            "--arch", "layered",
+        ])
+
+        assert result.exit_code != 0
+        assert "--doc" in result.output
+
+
+class TestCliRunLayered:
+    @patch("api_test_agent.cli.LayeredCodeGenerator")
+    @patch("api_test_agent.cli.TestCaseGenerator")
+    def test_run_layered(self, MockTCGen, MockCodeGen, tmp_path):
+        mock_tc = MagicMock()
+        mock_tc.generate.return_value = "## GET /pets\n| TC-001 | ... |"
+        MockTCGen.return_value = mock_tc
+
+        mock_code = MagicMock()
+        mock_code.generate.return_value = {
+            "base/config.py": "# config",
+            "tests/test_pets.py": "# tests",
+        }
+        MockCodeGen.return_value = mock_code
+
+        output_dir = tmp_path / "output"
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "run", str(FIXTURES / "petstore.yaml"),
+            "-o", str(output_dir),
+            "--arch", "layered",
+        ])
+
+        assert result.exit_code == 0
+        mock_tc.generate.assert_called_once()
+        mock_code.generate.assert_called_once()
