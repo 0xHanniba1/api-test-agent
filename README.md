@@ -15,8 +15,11 @@ uv sync
 ### 全流程（推荐）
 
 ```bash
-# 从 Swagger/OpenAPI 文档生成测试用例 + 代码
+# 从 Swagger/OpenAPI 文档生成测试用例 + 代码（平铺模式）
 api-test-agent run api-doc.yaml -o output/
+
+# 生成分层架构代码（base/data/api/services/tests 五层）
+api-test-agent run api-doc.yaml -o output/ --arch layered
 ```
 
 ### 分步执行
@@ -25,8 +28,11 @@ api-test-agent run api-doc.yaml -o output/
 # 第一步：生成测试用例文档
 api-test-agent gen-cases api-doc.yaml -o testcases.md
 
-# 第二步：从测试用例生成代码
+# 第二步：从测试用例生成代码（平铺模式）
 api-test-agent gen-code testcases.md -o output/
+
+# 第二步（分层模式）：需要通过 --doc 指定原始 API 文档
+api-test-agent gen-code testcases.md -o output/ --arch layered --doc api-doc.yaml
 ```
 
 ### 运行生成的测试
@@ -57,6 +63,8 @@ Options:
   --format auto|swagger|postman|markdown  文档格式（默认 auto）
   --filter <pattern>    按接口过滤，支持多次使用（见下方说明）
   --append              增量模式：追加用例 / 跳过已有代码文件
+  --arch flat|layered   代码架构风格（默认 flat，见下方说明）
+  --doc <file>          API 文档路径（gen-code 使用 --arch layered 时必填）
 ```
 
 ### 增量生成
@@ -82,6 +90,29 @@ api-test-agent run api-doc.yaml -o output/ --filter "POST /orders*" --filter "PU
 `--append` 行为：
 - `gen-cases` / `run`：将新用例追加到已有 Markdown 文件末尾
 - `gen-code` / `run`：跳过已存在的代码文件，只写入新文件
+
+### 分层架构模式
+
+使用 `--arch layered` 生成按接口自动化标准分层组织的代码：
+
+```
+output/
+├── base/              # 基础层：HttpClient 封装 + 环境配置
+│   ├── config.py
+│   └── client.py
+├── data/              # 数据层：YAML 测试数据（数据代码分离）
+│   └── users.yaml
+├── api/               # 接口封装层：每个资源一个类
+│   └── users_api.py
+├── services/          # 业务编排层：CRUD 业务流程组合
+│   └── user_flow.py
+├── tests/             # 用例与执行层
+│   ├── conftest.py
+│   └── test_users.py
+└── requirements.txt
+```
+
+接口按 tag 分组，每个 tag 在各层生成对应文件。测试代码通过 api 层调用接口，从 YAML 文件加载测试数据，不直接使用 requests。
 
 ## 配置
 

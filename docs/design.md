@@ -36,8 +36,13 @@
 输入文档 → [Parser] → ApiEndpoint (统一结构)
                             ↓
 ApiEndpoint → [TestCase Generator + Skills] → 测试用例文档 (Markdown)
-                                                    ↓
-测试用例文档 → [Code Generator] → pytest + requests 代码文件
+                            ↓                         ↓
+                    (--arch layered)            (--arch flat，默认)
+                            ↓                         ↓
+              [LayeredCodeGenerator]          [CodeGenerator]
+              testcases + endpoints           testcases only
+                            ↓                         ↓
+              五层架构项目目录                 平铺 pytest 文件
 ```
 
 ### 2.2 模块职责
@@ -57,7 +62,8 @@ api-test-agent/
 │       │   └── markdown.py     # Markdown 文档 → LLM 提取
 │       ├── generator/          # 生成器
 │       │   ├── testcase.py     # 测试用例生成（LLM）
-│       │   └── code.py         # 代码生成（LLM）
+│       │   ├── code.py         # 代码生成 - 平铺模式（LLM）
+│       │   └── layered.py     # 代码生成 - 分层架构模式（LLM + 模板）
 │       ├── skills/             # 可插拔测试知识模块
 │       │   ├── loader.py       # skill 加载与选择逻辑
 │       │   ├── base.md         # 基础测试规则（始终加载）
@@ -69,7 +75,11 @@ api-test-agent/
 │       │   └── business-flow.md      # 业务链路测试
 │       ├── prompts/            # prompt 模板
 │       │   ├── testcase.md     # 用例生成 prompt 模板
-│       │   └── code.md         # 代码生成 prompt 模板
+│       │   ├── code.md         # 代码生成 prompt 模板（平铺模式）
+│       │   ├── layered_api.md  # 分层 - 接口封装层 prompt
+│       │   ├── layered_data.md # 分层 - 数据层 YAML prompt
+│       │   ├── layered_services.md  # 分层 - 业务编排层 prompt
+│       │   └── layered_tests.md     # 分层 - 用例层 prompt
 │       └── llm.py              # litellm 封装（模型调用、重试、错误处理）
 ├── tests/                      # 项目自身的测试
 └── docs/
@@ -200,7 +210,9 @@ user   = ApiEndpoint JSON + 深度级别
 
 ### 3.4 代码生成器（Code Generator）
 
-#### 输出结构
+支持两种架构模式，通过 `--arch` 参数切换。
+
+#### 3.4.1 平铺模式（flat，默认）
 
 ```
 output/
@@ -265,6 +277,40 @@ class TestCreateUser:
 - 每条用例独立，不依赖执行顺序
 - 一个接口一个文件，一个用例一个方法
 
+#### 3.4.2 分层架构模式（layered）
+
+按接口自动化标准分层组织，接口按 tag 分组：
+
+```
+output/
+├── base/                    # 基础层
+│   ├── config.py            # 环境配置（BASE_URL, TOKEN）
+│   └── client.py            # HttpClient 轻量封装（requests.Session）
+├── data/                    # 数据层（YAML，数据代码分离）
+│   └── users.yaml           # 按 tag 一个文件
+├── api/                     # 接口封装层
+│   └── users_api.py         # 每个 tag 一个类，每个接口一个方法
+├── services/                # 业务编排层
+│   └── user_flow.py         # LLM 根据 CRUD 语义自动推断业务流程
+├── tests/                   # 用例与执行层
+│   ├── conftest.py          # fixtures（client + 各 tag 的 api 实例）
+│   └── test_users.py        # 测试用例，调用 api 层，数据从 YAML 加载
+└── requirements.txt         # 依赖
+```
+
+**生成策略：**
+
+| 层 | 生成方式 | LLM 调用 |
+|----|---------|---------|
+| base/ | 代码模板 | 无 |
+| api/ | LLM，按 tag 分组 | 每 tag 1 次 |
+| data/ | LLM，基于测试用例 | 每 tag 1 次 |
+| services/ | LLM，推断 CRUD 流程 | 每 tag 1 次 |
+| tests/ | LLM，引用 api + data | 每 tag 1 次 |
+| conftest, requirements | 代码模板 | 无 |
+
+`LayeredCodeGenerator` 需要 `testcases_md` + `endpoints` 两个输入（endpoints 用于按 tag 分组和读取接口签名）。
+
 ---
 
 ## 4. CLI 设计
@@ -289,7 +335,9 @@ api-test-agent gen-code testcases.md -o output/
 --model claude-sonnet                 # 指定模型
 --format swagger|postman|markdown|auto  # 文档格式，默认 auto
 --filter "POST /api/*"               # 只处理匹配的接口
---output-format markdown|excel       # 用例文档输出格式（未来扩展）
+--append                             # 增量模式
+--arch flat|layered                  # 代码架构风格，默认 flat
+--doc <file>                         # API 文档路径（gen-code --arch layered 时必填）
 ```
 
 ### 4.3 配置文件
