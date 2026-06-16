@@ -1,4 +1,4 @@
-# API Test Agent
+# API Test Gen
 
 API 文档 → 测试用例 → pytest+requests 自动化代码，一键生成。
 

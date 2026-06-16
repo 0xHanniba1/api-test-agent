@@ -1,4 +1,4 @@
-# API Test Agent 设计文档
+# API Test Gen 设计文档
 
 > 给定接口文档，自动生成测试用例文档 + pytest + requests 自动化代码。
 
