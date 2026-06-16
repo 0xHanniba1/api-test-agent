@@ -9,6 +9,7 @@ from api_test_gen.generator.testcase_document import (
     next_case_index,
     parse_testcase_document,
 )
+from api_test_gen.llm import LlmError
 from api_test_gen.output import (
     OutputError,
     WriteResult,
@@ -218,7 +219,7 @@ def _load_endpoints(
     click.echo(f"Parsing {doc_path} (format: {fmt})...")
     try:
         parsed = parse_document(doc_path, fmt, model=model)
-    except DocumentParseError as error:
+    except (DocumentParseError, LlmError) as error:
         raise click.ClickException(str(error)) from error
     endpoints = filter_endpoints(parsed, filters)
     click.echo(f"Found {len(endpoints)} endpoints.")
@@ -245,7 +246,7 @@ def _generate_code(
     click.echo(f"Generating {label}...")
     try:
         return generate_code(testcases, arch=arch, model=model, endpoints=endpoints)
-    except GenerationError as error:
+    except (GenerationError, LlmError) as error:
         raise click.ClickException(str(error)) from error
 
 
@@ -259,7 +260,7 @@ def _generate_testcases(
         return generate_testcases(
             endpoints, depth=depth, model=model, start_index=start_index
         )
-    except GenerationError as error:
+    except (GenerationError, LlmError) as error:
         raise click.ClickException(str(error)) from error
 
 

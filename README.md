@@ -89,7 +89,7 @@ src/api_test_gen/
 ## 安装
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/0xHanniba1/api-test-gen.git
 cd api-test-gen
 uv sync
 ```
